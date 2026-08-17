@@ -106,6 +106,12 @@ def normalize_major(value: str) -> str:
     value = re.sub(r"\s+", "", value)
     value = re.sub(r"(?:专业)?类专业$", "类", value)
     value = re.sub(r"专业$", "", value)
+    value = {
+        "材料": "材料类",
+        "材料类": "材料类",
+        "数学": "数学类",
+        "数学类": "数学类",
+    }.get(value, value)
     return value or "未注明专业"
 
 
@@ -132,6 +138,10 @@ def normalize_course(value: str) -> str:
     value = text(value)
     value = re.sub(r"^[《〈\"“']+|[》〉\"”']+$", "", value).strip()
     value = value.replace("《", "").replace("》", "").replace("〈", "").replace("〉", "")
+    value = {
+        "高等数学（一）B": "高等数学B（一）",
+        "高等数学（二）B": "高等数学B（二）",
+    }.get(value, value)
     return value or "未注明课程"
 
 
