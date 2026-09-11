@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import math
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from copy import copy
 from dataclasses import dataclass
@@ -103,6 +104,7 @@ def normalize_grade(feedback: str, class_name: str) -> str:
 
 def normalize_major(value: str) -> str:
     """Normalize only harmless suffix variants; never collapse different majors."""
+    value = unicodedata.normalize("NFKC", text(value))
     value = re.sub(r"\s+", "", value)
     value = re.sub(r"(?:专业)?类专业$", "类", value)
     value = re.sub(r"专业$", "", value)
@@ -111,6 +113,8 @@ def normalize_major(value: str) -> str:
         "材料类": "材料类",
         "数学": "数学类",
         "数学类": "数学类",
+        "数学应用数学": "数学与应用数学",
+        "数学与应用数学": "数学与应用数学",
     }.get(value, value)
     return value or "未注明专业"
 
@@ -135,7 +139,8 @@ def major_in_sentence(major: str) -> str:
 
 
 def normalize_course(value: str) -> str:
-    value = text(value)
+    value = unicodedata.normalize("NFKC", text(value))
+    value = re.sub(r"\s+", "", value)
     value = re.sub(r"^[《〈\"“']+|[》〉\"”']+$", "", value).strip()
     value = value.replace("《", "").replace("》", "").replace("〈", "").replace("〉", "")
     value = {
@@ -143,6 +148,14 @@ def normalize_course(value: str) -> str:
         "高等数学（二）B": "高等数学B（二）",
     }.get(value, value)
     return value or "未注明课程"
+
+
+def normalize_teacher(value: str) -> str:
+    """Remove invisible/formatting differences that split one teacher into two groups."""
+    value = unicodedata.normalize("NFKC", text(value))
+    value = re.sub(r"\s+", "", value)
+    value = re.sub(r"老师$", "", value)
+    return value
 
 
 def remove_personal_information(value: str, student_name: str) -> str:
@@ -201,13 +214,13 @@ def is_empty_feedback(value: str) -> bool:
     }
 
 
-def sentence_for_group(grade: str, major: str, course_contents: dict[str, list[str]]) -> str:
+def sentence_for_group(grade_label: str, major: str, course_contents: dict[str, list[str]]) -> str:
     course_clauses: list[str] = []
     for course, contents in course_contents.items():
         unique_contents = list(dict.fromkeys(item for item in contents if item))
         joined = "；".join(unique_contents)
         course_clauses.append(f"老师在所授的《{course}》课程中，{joined}")
-    lead = f"{grade}级{major_in_sentence(major)}的同学反映，"
+    lead = f"{grade_label}{major_in_sentence(major)}的同学反映，"
     return lead + "；".join(course_clauses) + "。"
 
 
@@ -243,7 +256,7 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
     records: list[dict[str, str]] = []
     skipped_empty = 0
     for _, row in faculty_rows.iterrows():
-        teacher = text(row[columns.teacher])
+        teacher = normalize_teacher(row[columns.teacher])
         course = normalize_course(row[columns.course])
         raw_feedback = text(row[columns.feedback])
         if teacher.lower() in EMPTY_MARKERS or course.lower() in EMPTY_MARKERS or is_empty_feedback(raw_feedback):
@@ -259,6 +272,7 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         records.append({
             "年级": grade,
             "专业": major,
+            "教师所在学院": TARGET_FACULTY,
             "教师": teacher,
             "课程": course,
             "内容": content,
@@ -267,41 +281,49 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
     if not records:
         raise ValueError("上传文件中没有找到数学与统计学院教师的有效反馈。")
 
-    grouped: dict[tuple[str, str, str], dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    # The requested merge identity is major + teacher + course.  Different
+    # students (and inconsistent/missing grade text) must not create duplicates.
+    grouped: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for record in records:
-        # 专业是不可省略的分组维度。同一教师面向“数学类”和
-        # “数学与应用数学”授课时，必须生成两条独立记录。
-        key = (record["年级"], record["专业"], record["教师"])
-        grouped[key][record["课程"]].append(record["内容"])
+        key = (record["专业"], record["教师所在学院"], record["教师"], record["课程"])
+        bucket = grouped.setdefault(key, {"grades": [], "contents": []})
+        bucket["grades"].append(record["年级"])
+        bucket["contents"].append(record["内容"])
 
     def grade_key(value: str) -> int:
         return int(value) if value.isdigit() else -1
 
     output_rows = []
-    for (grade, major, teacher), course_contents in sorted(
-        grouped.items(), key=lambda item: (-grade_key(item[0][0]), item[0][1], item[0][2])
+    for (major, faculty, teacher, course), bucket in sorted(
+        grouped.items(),
+        key=lambda item: (
+            -max((grade_key(grade) for grade in item[1]["grades"]), default=-1),
+            item[0][0], item[0][1], item[0][2], item[0][3],
+        ),
     ):
-        course_contents = consolidate_course_contents(course_contents)
-        courses = "、".join(course_contents.keys())
+        grades = sorted(set(bucket["grades"]), key=grade_key, reverse=True)
+        grade_label = "、".join(f"{item}级" if item.isdigit() else item for item in grades)
+        course_contents = {course: bucket["contents"]}
         output_rows.append({
-            "年级": f"{grade}级" if grade.isdigit() else grade,
+            "年级": grade_label,
             "专业": major,
             "教师": teacher,
-            "课程": courses,
-            "反馈信息": sentence_for_group(grade, major, course_contents),
+            "课程": course,
+            "反馈信息": sentence_for_group(grade_label, major, course_contents),
         })
 
     result = pd.DataFrame(output_rows)
     source_group_counts = Counter(
-        (record["年级"], record["专业"], record["教师"])
+        (record["专业"], record["教师所在学院"], record["教师"], record["课程"])
         for record in records
     )
     expected_groups = set(source_group_counts)
     actual_groups = {
         (
-            re.sub(r"级$", "", text(row["年级"])),
             normalize_major(text(row["专业"])),
-            text(row["教师"]),
+            TARGET_FACULTY,
+            normalize_teacher(text(row["教师"])),
+            normalize_course(text(row["课程"])),
         )
         for row in output_rows
     }
@@ -310,7 +332,7 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         raise RuntimeError(f"专业分组校验失败，以下教师记录未被保留：{missing}")
 
     teacher_majors: dict[str, set[str]] = defaultdict(set)
-    for _, major, teacher in expected_groups:
+    for major, _, teacher, _ in expected_groups:
         teacher_majors[teacher].add(major)
     multi_major_teachers = {
         teacher: sorted(majors)
@@ -330,14 +352,15 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         "multi_major_teachers": multi_major_teachers,
         "source_groups": [
             {
-                "年级": f"{grade}级" if grade.isdigit() else grade,
                 "专业": major,
+                "教师所在学院": faculty,
                 "教师": teacher,
+                "课程": course,
                 "有效原始记录数": count,
             }
-            for (grade, major, teacher), count in sorted(
+            for (major, faculty, teacher, course), count in sorted(
                 source_group_counts.items(),
-                key=lambda item: (-grade_key(item[0][0]), item[0][1], item[0][2]),
+                key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3]),
             )
         ],
     }
@@ -461,7 +484,7 @@ def main() -> None:
         st.info("请选择一个 Excel 文件。处理仅在当前运行环境中进行。")
         with st.expander("处理规则"):
             st.write("自动筛选教师所在院为“数学与统计学院”的记录，并按年级降序排列。")
-            st.write("同年级、同专业、同教师的反馈合并；不同年级或专业保持分开。")
+            st.write("同专业、同学院、同教师、同课程的学生反馈合并；不同课程保持分开。")
             st.write("自动删除信息员姓名与常见个人信息，统一使用“反映”和中文句号。")
         return
 
@@ -492,7 +515,7 @@ def main() -> None:
         st.info(f"已按专业分别保留同一教师的反馈：{details}")
 
     with st.expander("源记录分组核对"):
-        st.caption("这里显示生成前的有效记录数；源表没有的教师—专业组合不会由程序推测或补写。")
+        st.caption("这里显示每个专业—学院—教师—课程组合在合并前的有效反馈数。")
         st.dataframe(
             pd.DataFrame(summary["source_groups"]),
             use_container_width=True,
