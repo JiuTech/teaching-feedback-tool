@@ -21,6 +21,38 @@ TEMPLATE_PATH = APP_DIR / "template.xlsx"
 TARGET_FACULTY = "数学与统计学院"
 EMPTY_MARKERS = {"", "nan", "none", "无", "暂无", "不清楚", "未填写"}
 
+# Canonical names published by NEUQ.  Keep aliases explicit so a short but
+# ambiguous value is never expanded to the wrong major/course.
+MAJOR_ALIASES = {
+    "大数据": "数据科学与大数据技术",
+    "数据科学大数据技术": "数据科学与大数据技术",
+    "数据科学与大数据": "数据科学与大数据技术",
+    "数据科学与大数据技术": "数据科学与大数据技术",
+    "应用统计": "应用统计学",
+    "应用统计学": "应用统计学",
+    "金融": "金融学",
+    "金融学": "金融学",
+    "数学应用数学": "数学与应用数学",
+    "数学与应用数学": "数学与应用数学",
+}
+
+OFFICIAL_COURSE_NAMES = (
+    "高等代数(一)", "高等代数(二)", "抽象代数", "概率论", "数理统计",
+    "多元统计分析", "现代代数选讲", "统计软件课程设计", "统计调查课程设计",
+    "大数据科学导论", "生物统计学", "统计实务", "质量管理统计方法",
+    "可靠性统计", "大数据分析实践", "大数据机器学习实践", "贝叶斯统计(双语)",
+    "统计预测与决策", "统计计算与软件", "国民经济统计学", "非参数统计",
+    "大数据分析与处理", "概率论与数理统计(含随机过程)", "大数据批处理技术",
+    "电子商务大数据分析",
+)
+
+COURSE_ALIASES = {
+    "大数据导论": "大数据科学导论",
+    "概率统计": "概率论与数理统计",
+    "概率论与统计": "概率论与数理统计",
+    "贝叶斯统计双语": "贝叶斯统计(双语)",
+}
+
 
 @dataclass(frozen=True)
 class Columns:
@@ -113,9 +145,8 @@ def normalize_major(value: str) -> str:
         "材料类": "材料类",
         "数学": "数学类",
         "数学类": "数学类",
-        "数学应用数学": "数学与应用数学",
-        "数学与应用数学": "数学与应用数学",
     }.get(value, value)
+    value = MAJOR_ALIASES.get(value, value)
     return value or "未注明专业"
 
 
@@ -147,6 +178,15 @@ def normalize_course(value: str) -> str:
         "高等数学（一）B": "高等数学B（一）",
         "高等数学（二）B": "高等数学B（二）",
     }.get(value, value)
+    alias_key = re.sub(r"[（）()]", "", value)
+    value = COURSE_ALIASES.get(alias_key, value)
+
+    # Complete only an unambiguous official-name prefix.  For example,
+    # “统计软件” can safely become “统计软件课程设计”, while “大数据”
+    # stays unchanged because several official courses begin with it.
+    prefix_matches = [name for name in OFFICIAL_COURSE_NAMES if name.startswith(value)]
+    if len(prefix_matches) == 1:
+        value = prefix_matches[0]
     return value or "未注明课程"
 
 

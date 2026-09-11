@@ -3,7 +3,7 @@ import unittest
 
 import pandas as pd
 
-from app import normalize_major, transform_feedback
+from app import normalize_course, normalize_major, transform_feedback
 
 
 class FeedbackMergeTests(unittest.TestCase):
@@ -26,6 +26,14 @@ class FeedbackMergeTests(unittest.TestCase):
     def test_major_alias_is_canonicalized(self):
         self.assertEqual(normalize_major("数学应用数学"), "数学与应用数学")
         self.assertEqual(normalize_major(" 数学与应用数学专业 "), "数学与应用数学")
+        self.assertEqual(normalize_major("大数据"), "数据科学与大数据技术")
+        self.assertEqual(normalize_major("应用统计"), "应用统计学")
+        self.assertEqual(normalize_major("金融"), "金融学")
+
+    def test_course_name_completion_is_conservative(self):
+        self.assertEqual(normalize_course("统计软件"), "统计软件课程设计")
+        self.assertEqual(normalize_course("大数据导论"), "大数据科学导论")
+        self.assertEqual(normalize_course("大数据"), "大数据")
 
     def test_same_major_faculty_teacher_and_course_merge_across_students_and_grades(self):
         data = self.make_workbook([
