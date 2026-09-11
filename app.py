@@ -53,6 +53,11 @@ COURSE_ALIASES = {
     "贝叶斯统计双语": "贝叶斯统计(双语)",
 }
 
+TEACHER_ALIASES = {
+    "尚海峰": "尚海锋",
+    "尚海锋": "尚海锋",
+}
+
 
 @dataclass(frozen=True)
 class Columns:
@@ -195,7 +200,7 @@ def normalize_teacher(value: str) -> str:
     value = unicodedata.normalize("NFKC", text(value))
     value = re.sub(r"\s+", "", value)
     value = re.sub(r"老师$", "", value)
-    return value
+    return TEACHER_ALIASES.get(value, value)
 
 
 def remove_personal_information(value: str, student_name: str) -> str:

@@ -3,7 +3,7 @@ import unittest
 
 import pandas as pd
 
-from app import normalize_course, normalize_major, transform_feedback
+from app import normalize_course, normalize_major, normalize_teacher, transform_feedback
 
 
 class FeedbackMergeTests(unittest.TestCase):
@@ -35,10 +35,14 @@ class FeedbackMergeTests(unittest.TestCase):
         self.assertEqual(normalize_course("大数据导论"), "大数据科学导论")
         self.assertEqual(normalize_course("大数据"), "大数据")
 
+    def test_teacher_typo_is_canonicalized(self):
+        self.assertEqual(normalize_teacher("尚海峰"), "尚海锋")
+        self.assertEqual(normalize_teacher(" 尚 海锋老师 "), "尚海锋")
+
     def test_same_major_faculty_teacher_and_course_merge_across_students_and_grades(self):
         data = self.make_workbook([
             [1, "张三", "数学与应用数学", "2301", "数学与统计学院", "尚海锋", "代数与微积分", "23级数学与应用数学同学反映，讲解清楚。"],
-            [1, "李四", "数学应用数学", "2401", "数学与统计学院", "尚 海锋老师", "代数与微积分", "24级数学应用数学同学反映，建议增加例题。"],
+            [1, "李四", "数学应用数学", "2401", "数学与统计学院", "尚海峰", "代数与微积分", "24级数学应用数学同学反映，建议增加例题。"],
             [1, "王五", "数学与应用数学", "2401", "数学与统计学院", "尚海锋", "概率论", "24级数学与应用数学同学反映，进度适中。"],
         ])
 
