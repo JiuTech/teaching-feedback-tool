@@ -503,7 +503,7 @@ def output_filename(source_filename: str, fallback_week: int) -> str:
         else:
             week = fallback_week
 
-    return f"关于数学与统计学院第{chinese_number(week)}周教学信息反馈.xlsx"
+    return f"关于数学与统计学院第{week}周教学信息反馈.xlsx"
 
 
 def main() -> None:

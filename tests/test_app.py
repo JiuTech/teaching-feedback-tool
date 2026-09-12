@@ -3,7 +3,13 @@ import unittest
 
 import pandas as pd
 
-from app import normalize_course, normalize_major, normalize_teacher, transform_feedback
+from app import (
+    normalize_course,
+    normalize_major,
+    normalize_teacher,
+    output_filename,
+    transform_feedback,
+)
 
 
 class FeedbackMergeTests(unittest.TestCase):
@@ -38,6 +44,16 @@ class FeedbackMergeTests(unittest.TestCase):
     def test_teacher_typo_is_canonicalized(self):
         self.assertEqual(normalize_teacher("尚海峰"), "尚海锋")
         self.assertEqual(normalize_teacher(" 尚 海锋老师 "), "尚海锋")
+
+    def test_output_filename_uses_arabic_week_number(self):
+        self.assertEqual(
+            output_filename("第十二周原始反馈.xlsx", 1),
+            "关于数学与统计学院第12周教学信息反馈.xlsx",
+        )
+        self.assertEqual(
+            output_filename("原始反馈.xlsx", 3),
+            "关于数学与统计学院第3周教学信息反馈.xlsx",
+        )
 
     def test_same_major_faculty_teacher_and_course_merge_across_students_and_grades(self):
         data = self.make_workbook([
