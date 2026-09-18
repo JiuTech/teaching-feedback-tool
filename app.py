@@ -42,7 +42,7 @@ OFFICIAL_COURSE_NAMES = (
     "大数据科学导论", "生物统计学", "统计实务", "质量管理统计方法",
     "可靠性统计", "大数据分析实践", "大数据机器学习实践", "贝叶斯统计(双语)",
     "统计预测与决策", "统计计算与软件", "国民经济统计学", "非参数统计",
-    "大数据分析与处理", "概率论与数理统计(含随机过程)", "大数据批处理技术",
+    "大数据分析与处理", "概率论与数理统计A2", "大数据批处理技术",
     "电子商务大数据分析",
 )
 
@@ -50,6 +50,8 @@ COURSE_ALIASES = {
     "大数据导论": "大数据科学导论",
     "概率统计": "概率论与数理统计",
     "概率论与统计": "概率论与数理统计",
+    "概率论与数理统计": "概率论与数理统计A2",
+    "概率论与数理统计含随机过程": "概率论与数理统计A2",
     "贝叶斯统计双语": "贝叶斯统计(双语)",
 }
 
@@ -145,6 +147,11 @@ def normalize_major(value: str) -> str:
     value = re.sub(r"\s+", "", value)
     value = re.sub(r"(?:专业)?类专业$", "类", value)
     value = re.sub(r"专业$", "", value)
+    value = re.sub(
+        r"^(数学(?:与)?应用数学)[(（]中外合作办学[)）]$",
+        "数学与应用数学",
+        value,
+    )
     value = {
         "材料": "材料类",
         "材料类": "材料类",
@@ -215,21 +222,21 @@ def remove_personal_information(value: str, student_name: str) -> str:
 
 
 def strip_existing_lead(value: str, course: str) -> str:
-    marker = re.search(r"(?:同学|学生)?(?:反映|反馈)[，,：:\s]*", value)
-    if marker:
-        value = value[marker.end():]
-
+    """Remove every repeated standard lead while keeping the substantive feedback."""
     course_pattern = re.escape(course)
     patterns = [
+        r"^(?:20)?\d{2}\s*级?.{0,60}?(?:同学|学生)(?:们)?(?:反映|反馈|表示|认为)[，,：:\s]*",
+        r"^(?:有)?(?:部分|一些|个别)?(?:同学|学生)(?:们)?(?:反映|反馈|表示|认为)[，,：:\s]*",
         rf"^(?:老师)?\s*(?:在)?\s*(?:所授|所教授|教授|讲授)的?\s*[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)?\s*[，,：:\s]*",
         r"^(?:老师)?\s*(?:在)?\s*(?:所授|所教授|教授|讲授)的?\s*[《〈]?[^》〉，,。]{1,40}?[》〉]?\s*(?:课程中|课程)\s*[，,：:\s]*",
         rf"^(?:老师)?\s*(?:在)?\s*[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)\s*[，,：:\s]*",
         rf"^[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)?\s*[，,：:\s]*",
     ]
-    for pattern in patterns:
-        updated = re.sub(pattern, "", value, count=1)
-        if updated != value:
-            value = updated
+    for _ in range(8):
+        before = value
+        for pattern in patterns:
+            value = re.sub(pattern, "", value, count=1)
+        if value == before:
             break
     return value
 
@@ -242,13 +249,36 @@ def clean_feedback(raw: str, student_name: str, teacher: str, course: str) -> st
         if len(teacher) >= 2:
             value = re.sub(rf"{re.escape(teacher[0])}\s*老师", "老师", value)
     value = strip_existing_lead(value, course)
-    value = re.sub(r"(?:有)?同学(?:们)?(?:反映|反馈)[，,：:\s]*", "", value)
+    value = re.sub(r"(?:有)?同学(?:们)?(?:反映|反馈|表示)[，,：:\s]*", "", value)
     value = value.replace("反应", "反映")
     value = re.sub(r"\s*\n\s*", "", value)
     value = re.sub(r"\s+", "", value)
     value = re.sub(r"^[，,。；;：:\s]+", "", value)
     value = re.sub(r"[。！？!?；;，,\s]+$", "", value)
     return value
+
+
+def merge_feedback_contents(contents: list[str]) -> str:
+    """Deduplicate feedback and connect praise with requests in natural Chinese."""
+    unique: list[str] = []
+    for content in contents:
+        for clause in re.split(r"[。；;]+", content):
+            clause = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", clause)
+            if clause and clause not in unique:
+                unique.append(clause)
+    if not unique:
+        return ""
+
+    merged = unique[0]
+    improvement_leads = ("希望", "建议", "最好", "可以", "应当", "需要", "但", "不过", "然而")
+    for clause in unique[1:]:
+        if clause.startswith(("但", "不过", "然而")):
+            merged += f"，{clause}"
+        elif clause.startswith(improvement_leads):
+            merged += f"，但{clause}"
+        else:
+            merged += f"；{clause}"
+    return merged
 
 
 def is_empty_feedback(value: str) -> bool:
@@ -262,8 +292,7 @@ def is_empty_feedback(value: str) -> bool:
 def sentence_for_group(grade_label: str, major: str, course_contents: dict[str, list[str]]) -> str:
     course_clauses: list[str] = []
     for course, contents in course_contents.items():
-        unique_contents = list(dict.fromkeys(item for item in contents if item))
-        joined = "；".join(unique_contents)
+        joined = merge_feedback_contents(contents)
         course_clauses.append(f"老师在所授的《{course}》课程中，{joined}")
     lead = f"{grade_label}{major_in_sentence(major)}的同学反映，"
     return lead + "；".join(course_clauses) + "。"
@@ -326,28 +355,24 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
     if not records:
         raise ValueError("上传文件中没有找到数学与统计学院教师的有效反馈。")
 
-    # The requested merge identity is major + teacher + course.  Different
-    # students (and inconsistent/missing grade text) must not create duplicates.
-    grouped: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    # Merge only within the same grade, canonical major, faculty, teacher and course.
+    grouped: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
     for record in records:
-        key = (record["专业"], record["教师所在学院"], record["教师"], record["课程"])
-        bucket = grouped.setdefault(key, {"grades": [], "contents": []})
-        bucket["grades"].append(record["年级"])
+        key = (record["年级"], record["专业"], record["教师所在学院"], record["教师"], record["课程"])
+        bucket = grouped.setdefault(key, {"contents": []})
         bucket["contents"].append(record["内容"])
 
     def grade_key(value: str) -> int:
         return int(value) if value.isdigit() else -1
 
     output_rows = []
-    for (major, faculty, teacher, course), bucket in sorted(
+    for (grade, major, faculty, teacher, course), bucket in sorted(
         grouped.items(),
         key=lambda item: (
-            -max((grade_key(grade) for grade in item[1]["grades"]), default=-1),
-            item[0][0], item[0][1], item[0][2], item[0][3],
+            -grade_key(item[0][0]), item[0][1], item[0][2], item[0][3], item[0][4],
         ),
     ):
-        grades = sorted(set(bucket["grades"]), key=grade_key, reverse=True)
-        grade_label = "、".join(f"{item}级" if item.isdigit() else item for item in grades)
+        grade_label = f"{grade}级" if grade.isdigit() else grade
         course_contents = {course: bucket["contents"]}
         output_rows.append({
             "年级": grade_label,
@@ -359,12 +384,13 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
 
     result = pd.DataFrame(output_rows)
     source_group_counts = Counter(
-        (record["专业"], record["教师所在学院"], record["教师"], record["课程"])
+        (record["年级"], record["专业"], record["教师所在学院"], record["教师"], record["课程"])
         for record in records
     )
     expected_groups = set(source_group_counts)
     actual_groups = {
         (
+            text(row["年级"]).removesuffix("级"),
             normalize_major(text(row["专业"])),
             TARGET_FACULTY,
             normalize_teacher(text(row["教师"])),
@@ -377,7 +403,7 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         raise RuntimeError(f"专业分组校验失败，以下教师记录未被保留：{missing}")
 
     teacher_majors: dict[str, set[str]] = defaultdict(set)
-    for major, _, teacher, _ in expected_groups:
+    for _, major, _, teacher, _ in expected_groups:
         teacher_majors[teacher].add(major)
     multi_major_teachers = {
         teacher: sorted(majors)
@@ -397,15 +423,16 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         "multi_major_teachers": multi_major_teachers,
         "source_groups": [
             {
+                "年级": f"{grade}级" if grade.isdigit() else grade,
                 "专业": major,
                 "教师所在学院": faculty,
                 "教师": teacher,
                 "课程": course,
                 "有效原始记录数": count,
             }
-            for (major, faculty, teacher, course), count in sorted(
+            for (grade, major, faculty, teacher, course), count in sorted(
                 source_group_counts.items(),
-                key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3]),
+                key=lambda item: (item[0][0], item[0][1], item[0][2], item[0][3], item[0][4]),
             )
         ],
     }
@@ -529,7 +556,8 @@ def main() -> None:
         st.info("请选择一个 Excel 文件。处理仅在当前运行环境中进行。")
         with st.expander("处理规则"):
             st.write("自动筛选教师所在院为“数学与统计学院”的记录，并按年级降序排列。")
-            st.write("同专业、同学院、同教师、同课程的学生反馈合并；不同课程保持分开。")
+            st.write("同年级、同专业、同学院、同教师、同课程的学生反馈合并；不同年级或课程保持分开。")
+            st.write("数学与应用数学（中外合作办学）按数学与应用数学归类，并统一规范课程名称。")
             st.write("自动删除信息员姓名与常见个人信息，统一使用“反映”和中文句号。")
         return
 
