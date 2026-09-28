@@ -30,6 +30,7 @@ MAJOR_ALIASES = {
     "数据科学与大数据技术": "数据科学与大数据技术",
     "应用统计": "应用统计学",
     "应用统计学": "应用统计学",
+    "统计": "应用统计学",
     "金融": "金融学",
     "金融学": "金融学",
     "数学应用数学": "数学与应用数学",
@@ -42,7 +43,7 @@ OFFICIAL_COURSE_NAMES = (
     "大数据科学导论", "生物统计学", "统计实务", "质量管理统计方法",
     "可靠性统计", "大数据分析实践", "大数据机器学习实践", "贝叶斯统计(双语)",
     "统计预测与决策", "统计计算与软件", "国民经济统计学", "非参数统计",
-    "大数据分析与处理", "概率论与数理统计A2", "大数据批处理技术",
+    "大数据分析与处理", "概率论与数理统计", "概率论与数理统计A2", "大数据批处理技术",
     "电子商务大数据分析",
 )
 
@@ -50,7 +51,6 @@ COURSE_ALIASES = {
     "大数据导论": "大数据科学导论",
     "概率统计": "概率论与数理统计",
     "概率论与统计": "概率论与数理统计",
-    "概率论与数理统计": "概率论与数理统计A2",
     "概率论与数理统计含随机过程": "概率论与数理统计A2",
     "贝叶斯统计双语": "贝叶斯统计(双语)",
 }
@@ -170,8 +170,9 @@ def major_from_feedback(feedback: str, fallback: str) -> str:
     )
     if match:
         candidate = re.sub(r"[／/](?:类|专业)$", "", match.group(1).strip())
-        if candidate:
-            return normalize_major(candidate)
+        normalized = normalize_major(candidate)
+        if normalized not in {"", "相关", "有关", "本", "该", "未注明专业"}:
+            return normalized
     return normalize_major(fallback)
 
 
@@ -224,12 +225,13 @@ def remove_personal_information(value: str, student_name: str) -> str:
 def strip_existing_lead(value: str, course: str) -> str:
     """Remove every repeated standard lead while keeping the substantive feedback."""
     course_pattern = re.escape(course)
+    teaching_prefix = r"(?:老师)?\s*(?:所在)?\s*(?:在)?\s*(?:所授|所受|所教授|教授|讲授|授)的?\s*"
     patterns = [
         r"^(?:20)?\d{2}\s*级?.{0,60}?(?:同学|学生)(?:们)?(?:反映|反馈|表示|认为)[，,：:\s]*",
         r"^(?:有)?(?:部分|一些|个别)?(?:同学|学生)(?:们)?(?:反映|反馈|表示|认为)[，,：:\s]*",
-        rf"^(?:老师)?\s*(?:在)?\s*(?:所授|所教授|教授|讲授)的?\s*[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)?\s*[，,：:\s]*",
-        r"^(?:老师)?\s*(?:在)?\s*(?:所授|所教授|教授|讲授)的?\s*[《〈]?[^》〉，,。]{1,40}?[》〉]?\s*(?:课程中|课程)\s*[，,：:\s]*",
-        rf"^(?:老师)?\s*(?:在)?\s*[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)\s*[，,：:\s]*",
+        rf"^{teaching_prefix}[《〈]?{course_pattern}[》〉]?\s*的?\s*(?:课程|课)?\s*(?:中)?\s*[，,：:\s]*",
+        rf"^{teaching_prefix}[《〈]?[^》〉，,。；;]{{1,40}}?[》〉]?\s*的?\s*(?:课程|课)\s*(?:中)?\s*[，,：:\s]*",
+        rf"^(?:老师)?\s*(?:在)?\s*[《〈]?{course_pattern}[》〉]?\s*的?\s*(?:课程|课)?\s*(?:中)\s*[，,：:\s]*",
         rf"^[《〈]?{course_pattern}[》〉]?\s*(?:课程)?\s*(?:中)?\s*[，,：:\s]*",
     ]
     for _ in range(8):
@@ -249,7 +251,13 @@ def clean_feedback(raw: str, student_name: str, teacher: str, course: str) -> st
         if len(teacher) >= 2:
             value = re.sub(rf"{re.escape(teacher[0])}\s*老师", "老师", value)
     value = strip_existing_lead(value, course)
-    value = re.sub(r"(?:有)?同学(?:们)?(?:反映|反馈|表示)[，,：:\s]*", "", value)
+    value = re.sub(r"^(?:有)?同学(?:们)?(?:反映|反馈|表示)[，,：:\s]*", "", value)
+    value = re.sub(r"^老师(?=(?:上课|讲课|授课|课上|课堂|会|能够|可以|按时|认真|经常))", "", value)
+    value = re.sub(
+        r"(?:[，,；;。]\s*)?同学(?:们)?反馈(?:很好|良好|较好|好)\s*$",
+        "",
+        value,
+    )
     value = value.replace("反应", "反映")
     value = re.sub(r"\s*\n\s*", "", value)
     value = re.sub(r"\s+", "", value)
@@ -259,25 +267,85 @@ def clean_feedback(raw: str, student_name: str, teacher: str, course: str) -> st
 
 
 def merge_feedback_contents(contents: list[str]) -> str:
-    """Deduplicate feedback and connect praise with requests in natural Chinese."""
-    unique: list[str] = []
+    """Deduplicate feedback, keep detail first, and place requests after observations."""
+    descriptions: list[str] = []
+    requests: list[tuple[str, bool]] = []
+    generic_praise = re.compile(r"^(?:讲|说|教)(?:的|得)?(?:非常|特别|很)?(?:好|棒)$")
+
+    def add_unique(target: list[str], value: str) -> None:
+        value = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", value)
+        if value and value not in target:
+            target.append(value)
+
     for content in contents:
-        for clause in re.split(r"[。；;]+", content):
-            clause = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", clause)
-            if clause and clause not in unique:
-                unique.append(clause)
-    if not unique:
+        item = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", content)
+        item = re.sub(
+            r"(?:^|[，,；;。])(?:同学(?:们)?反馈(?:很好|良好|较好|好)|"
+            r"(?:讲|说|教)(?:的|得)?(?:非常|特别|很)?(?:好|棒))$",
+            "",
+            item,
+        )
+        item = re.sub(r"[，,。；;：:\s]+$", "", item)
+        if not item or generic_praise.fullmatch(item):
+            continue
+
+        request_match = re.search(
+            r"(?:^|[，,。；;])((?:但是|但|不过|然而)?(?:希望|建议|最好|应当|需要).*)$",
+            item,
+        )
+        if request_match:
+            description = re.sub(r"[，,。；;：:\s]+$", "", item[:request_match.start(1)])
+            add_unique(descriptions, description)
+            request = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", request_match.group(1))
+            request_item = (request, not bool(description))
+            if request and request_item not in requests:
+                requests.append(request_item)
+        else:
+            add_unique(descriptions, item)
+
+    if not descriptions and not requests:
         return ""
 
-    merged = unique[0]
-    improvement_leads = ("希望", "建议", "最好", "可以", "应当", "需要", "但", "不过", "然而")
-    for clause in unique[1:]:
-        if clause.startswith(("但", "不过", "然而")):
-            merged += f"，{clause}"
-        elif clause.startswith(improvement_leads):
-            merged += f"，但{clause}"
-        else:
-            merged += f"；{clause}"
+    # Remove repeated praise about the same teaching aspect while preserving
+    # differing or conflicting student opinions (for example, positive and
+    # negative comments about the board work).
+    seen_topics: set[tuple[str, str]] = set()
+    deduplicated_descriptions: list[str] = []
+    for description in descriptions:
+        kept_fragments: list[str] = []
+        for fragment in re.split(r"[，,]+", description):
+            fragment = fragment.strip()
+            if not fragment:
+                continue
+            topic = ""
+            if "板书" in fragment:
+                topic = "板书"
+            elif re.search(r"(?:讲课|讲解|讲授|讲清).*(?:清晰|清楚|细致|条理|重点|重难点)|(?:清晰|清楚|细致|条理).*(?:讲课|讲解|讲授|讲清)", fragment):
+                topic = "讲解"
+            polarity = "负面" if re.search(r"不太|不够|不清|没|不足|较乱|太快|过快|跟不上|缺少|较少", fragment) else "正面"
+            signature = (topic, polarity)
+            if topic and signature in seen_topics:
+                continue
+            if topic:
+                seen_topics.add(signature)
+            kept_fragments.append(fragment)
+        if kept_fragments:
+            deduplicated_descriptions.append("，".join(kept_fragments))
+    descriptions = deduplicated_descriptions
+
+    if descriptions:
+        use_comma = len(descriptions) > 1 and all(len(item) <= 70 for item in descriptions) and sum(map(len, descriptions)) <= 140
+        merged = ("，" if use_comma else "；").join(descriptions)
+    else:
+        merged = ""
+    if requests:
+        request_values = []
+        for request, standalone in requests:
+            if merged and standalone and request.startswith(("希望", "建议")):
+                request = f"但{request}"
+            request_values.append(request)
+        request_text = "；".join(request_values)
+        merged = f"{merged}，{request_text}" if merged else request_text
     return merged
 
 
@@ -298,15 +366,34 @@ def sentence_for_group(grade_label: str, major: str, course_contents: dict[str, 
     return lead + "；".join(course_clauses) + "。"
 
 
-def consolidate_course_contents(course_contents: dict[str, list[str]]) -> dict[str, list[str]]:
-    """Merge numbered spelling variants when the unnumbered course also exists."""
-    consolidated: dict[str, list[str]] = {}
-    names = list(course_contents)
-    for course, contents in course_contents.items():
-        base = re.sub(r"(?:[（(]?[一二三四五六七八九十\d]+[）)]?)$", "", course).strip()
-        target = base if base and base in names else course
-        consolidated.setdefault(target, []).extend(contents)
-    return consolidated
+def harmonize_course_variants(records: list[dict[str, object]]) -> None:
+    """Merge a base course into A2 only when both labels occur in the same group."""
+    courses_by_group: dict[tuple[str, str, str, str], set[str]] = defaultdict(set)
+    for record in records:
+        group = (
+            str(record["年级"]),
+            str(record["专业"]),
+            str(record["教师所在学院"]),
+            str(record["教师"]),
+        )
+        courses_by_group[group].add(str(record["课程"]))
+
+    base = "概率论与数理统计"
+    numbered = "概率论与数理统计A2"
+    for record in records:
+        group = (
+            str(record["年级"]),
+            str(record["专业"]),
+            str(record["教师所在学院"]),
+            str(record["教师"]),
+        )
+        courses = courses_by_group[group]
+        record["_merge_priority"] = 0
+        if base in courses and numbered in courses:
+            if record["课程"] == base:
+                record["课程"] = numbered
+            else:
+                record["_merge_priority"] = 1
 
 
 def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[str, object]]:
@@ -327,7 +414,7 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
     faculty_mask = current[columns.teacher_faculty].fillna("").astype(str).str.contains(TARGET_FACULTY, regex=False)
     faculty_rows = current.loc[faculty_mask].copy()
 
-    records: list[dict[str, str]] = []
+    records: list[dict[str, object]] = []
     skipped_empty = 0
     for _, row in faculty_rows.iterrows():
         teacher = normalize_teacher(row[columns.teacher])
@@ -355,12 +442,14 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
     if not records:
         raise ValueError("上传文件中没有找到数学与统计学院教师的有效反馈。")
 
+    harmonize_course_variants(records)
+
     # Merge only within the same grade, canonical major, faculty, teacher and course.
     grouped: dict[tuple[str, str, str, str, str], dict[str, object]] = {}
-    for record in records:
+    for sequence, record in enumerate(records):
         key = (record["年级"], record["专业"], record["教师所在学院"], record["教师"], record["课程"])
         bucket = grouped.setdefault(key, {"contents": []})
-        bucket["contents"].append(record["内容"])
+        bucket["contents"].append((int(record["_merge_priority"]), sequence, str(record["内容"])))
 
     def grade_key(value: str) -> int:
         return int(value) if value.isdigit() else -1
@@ -373,7 +462,8 @@ def transform_feedback(data: bytes, filename: str) -> tuple[pd.DataFrame, dict[s
         ),
     ):
         grade_label = f"{grade}级" if grade.isdigit() else grade
-        course_contents = {course: bucket["contents"]}
+        contents = [item[2] for item in sorted(bucket["contents"])]
+        course_contents = {course: contents}
         output_rows.append({
             "年级": grade_label,
             "专业": major,
@@ -558,6 +648,8 @@ def main() -> None:
             st.write("自动筛选教师所在院为“数学与统计学院”的记录，并按年级降序排列。")
             st.write("同年级、同专业、同学院、同教师、同课程的学生反馈合并；不同年级或课程保持分开。")
             st.write("数学与应用数学（中外合作办学）按数学与应用数学归类，并统一规范课程名称。")
+            st.write("“概率论与数理统计”单独出现时保留原名；同组同时出现 A2 时才合并为“概率论与数理统计A2”。")
+            st.write("“相关专业”等模糊表述不会覆盖原始专业；重复评价会精简，不同意见和具体建议会保留。")
             st.write("自动删除信息员姓名与常见个人信息，统一使用“反映”和中文句号。")
         return
 
