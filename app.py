@@ -258,6 +258,20 @@ def clean_feedback(raw: str, student_name: str, teacher: str, course: str) -> st
         "",
         value,
     )
+    value = re.sub(
+        r"希望老师在课前有一些提前(?:提前)?的预告",
+        "希望老师课前预告教学内容",
+        value,
+    )
+    value = value.replace("以共同学们的预习", "以便同学们预习")
+    value = value.replace("进度始终，非常好", "课堂进度适中，整体效果较好")
+    value = value.replace("进度始终", "课堂进度适中")
+    value = value.replace("板书有点不太工整", "板书不太工整")
+    value = value.replace("但是板书", "但板书")
+    value = re.sub(r"(?:但是|但)讲(?:的|得)非常棒", "讲解效果很好", value)
+    value = re.sub(r"[，,]并且希望", "；建议", value)
+    value = re.sub(r"[，,]希望", "；希望", value)
+    value = re.sub(r"[，,]同时(?=老师|课堂|课程)", "；", value)
     value = value.replace("反应", "反映")
     value = re.sub(r"\s*\n\s*", "", value)
     value = re.sub(r"\s+", "", value)
@@ -278,30 +292,33 @@ def merge_feedback_contents(contents: list[str]) -> str:
             target.append(value)
 
     for content in contents:
-        item = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", content)
-        item = re.sub(
-            r"(?:^|[，,；;。])(?:同学(?:们)?反馈(?:很好|良好|较好|好)|"
-            r"(?:讲|说|教)(?:的|得)?(?:非常|特别|很)?(?:好|棒))$",
-            "",
-            item,
-        )
-        item = re.sub(r"[，,。；;：:\s]+$", "", item)
-        if not item or generic_praise.fullmatch(item):
-            continue
+        # Work sentence by sentence so that a request in the middle of one
+        # student's feedback does not swallow later observations.
+        for item in re.split(r"[。；;]+", content):
+            item = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", item)
+            item = re.sub(
+                r"(?:^|[，,；;。])(?:同学(?:们)?反馈(?:很好|良好|较好|好)|"
+                r"(?:讲|说|教)(?:的|得)?(?:非常|特别|很)?(?:好|棒))$",
+                "",
+                item,
+            )
+            item = re.sub(r"[，,。；;：:\s]+$", "", item)
+            if not item or generic_praise.fullmatch(item):
+                continue
 
-        request_match = re.search(
-            r"(?:^|[，,。；;])((?:但是|但|不过|然而)?(?:希望|建议|最好|应当|需要).*)$",
-            item,
-        )
-        if request_match:
-            description = re.sub(r"[，,。；;：:\s]+$", "", item[:request_match.start(1)])
-            add_unique(descriptions, description)
-            request = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", request_match.group(1))
-            request_item = (request, not bool(description))
-            if request and request_item not in requests:
-                requests.append(request_item)
-        else:
-            add_unique(descriptions, item)
+            request_match = re.search(
+                r"(?:^|[，,。；;])((?:但是|但|不过|然而)?(?:希望|建议|最好|应当|需要).*)$",
+                item,
+            )
+            if request_match:
+                description = re.sub(r"[，,。；;：:\s]+$", "", item[:request_match.start(1)])
+                add_unique(descriptions, description)
+                request = re.sub(r"^[，,。；;：:\s]+|[，,。；;：:\s]+$", "", request_match.group(1))
+                request_item = (request, not bool(description))
+                if request and request_item not in requests:
+                    requests.append(request_item)
+            else:
+                add_unique(descriptions, item)
 
     if not descriptions and not requests:
         return ""
@@ -320,7 +337,7 @@ def merge_feedback_contents(contents: list[str]) -> str:
             topic = ""
             if "板书" in fragment:
                 topic = "板书"
-            elif re.search(r"(?:讲课|讲解|讲授|讲清).*(?:清晰|清楚|细致|条理|重点|重难点)|(?:清晰|清楚|细致|条理).*(?:讲课|讲解|讲授|讲清)", fragment):
+            elif re.search(r"(?:讲课|讲解|讲授|讲清).*(?:清晰|清楚|细致|条理|重点|重难点|效果)|(?:清晰|清楚|细致|条理|效果).*(?:讲课|讲解|讲授|讲清)", fragment):
                 topic = "讲解"
             polarity = "负面" if re.search(r"不太|不够|不清|没|不足|较乱|太快|过快|跟不上|缺少|较少", fragment) else "正面"
             signature = (topic, polarity)
@@ -340,12 +357,15 @@ def merge_feedback_contents(contents: list[str]) -> str:
         merged = ""
     if requests:
         request_values = []
-        for request, standalone in requests:
-            if merged and standalone and request.startswith(("希望", "建议")):
+        for index, (request, standalone) in enumerate(requests):
+            had_contrast = bool(re.match(r"^(?:但是|但)希望", request))
+            request = re.sub(r"^(?:但是|但)希望", "希望", request)
+            if merged and request.startswith("希望") and (had_contrast or (standalone and index == 0)):
                 request = f"但{request}"
             request_values.append(request)
         request_text = "；".join(request_values)
-        merged = f"{merged}，{request_text}" if merged else request_text
+        connector = "；" if "；" in merged or len(merged) > 100 else "，"
+        merged = f"{merged}{connector}{request_text}" if merged else request_text
     return merged
 
 

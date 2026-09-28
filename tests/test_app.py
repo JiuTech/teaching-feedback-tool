@@ -117,7 +117,7 @@ class FeedbackMergeTests(unittest.TestCase):
     def test_base_course_is_only_promoted_to_a2_when_a2_is_also_present(self):
         data = self.make_workbook([
             [3, "张三", "会计学", "2501", "数学与统计学院", "王翠萍", "概率论与数理统计A2", "25级会计学专业的同学反映，老师在所授的《概率论与数理统计A2》的课程中，认真细致，条理清晰，但是希望增加练习。"],
-            [3, "李四", "会计学", "2505", "数学与统计学院", "王翠萍", "概率论与数理统计", "25级会计学专业的同学反映，老师在所授的《概率论与数理统计》课程中，讲课深入浅出，循序渐进，讲得非常好。"],
+            [3, "李四", "会计学", "2505", "数学与统计学院", "王翠萍", "概率论与数理统计", "25级会计学专业的同学反映，老师在所授的《概率论与数理统计》课程中，老师在教授的《概率论与数理统计》课中，讲课深入浅出，循序渐进，讲得非常好。"],
         ])
 
         result, _ = transform_feedback(data, "第3周.xlsx")
@@ -126,8 +126,9 @@ class FeedbackMergeTests(unittest.TestCase):
         self.assertEqual(result.iloc[0]["课程"], "概率论与数理统计A2")
         self.assertEqual(
             result.iloc[0]["反馈信息"],
-            "25级会计学专业的同学反映，老师在所授的《概率论与数理统计A2》课程中，讲课深入浅出，循序渐进，认真细致，条理清晰，但是希望增加练习。",
+            "25级会计学专业的同学反映，老师在所授的《概率论与数理统计A2》课程中，讲课深入浅出，循序渐进，认真细致，条理清晰，但希望增加练习。",
         )
+        self.assertNotIn("老师在教授", result.iloc[0]["反馈信息"])
 
     def test_base_course_stays_unnumbered_without_numbered_source(self):
         data = self.make_workbook([
@@ -156,6 +157,29 @@ class FeedbackMergeTests(unittest.TestCase):
         self.assertEqual(feedback.count("板书"), 1)
         self.assertIn("能耐心解答同学们课上提出的数学问题", feedback)
         self.assertTrue(feedback.endswith("希望老师能继续用不同颜色的粉笔分清正文和草稿，感谢老师的付出。"))
+
+    def test_repeated_course_leads_and_awkward_phrasing_are_polished(self):
+        data = self.make_workbook([
+            [4, "张三", "数学与应用数学", "2501", "数学与统计学院", "尚海锋", "代数与微积分", "25级数学与应用数学专业的同学反映，老师在所受的代数与微积分课程中，讲课清晰，富有激情，但是板书有点不太工整，并且希望老师在课前有一些提前提前的预告，以共同学们的预习。"],
+            [4, "李四", "数学与应用数学（中外合作办学）", "2502", "数学与统计学院", "尚海锋", "代数与微积分", "25级数学与应用数学专业的同学反映，老师在所受的微积分课程中，讲解清晰，进度始终，老师有时板书有点看不清楚，但是讲的非常棒。"],
+            [4, "王五", "数学与应用数学", "2503", "数学与统计学院", "尚海锋", "代数与微积分", "25级数学与应用数学专业的同学反映，老师在教授的《代数与微积分》课中，课堂氛围较好，能够带动大家思考。"],
+        ])
+
+        result, _ = transform_feedback(data, "第4周.xlsx")
+
+        self.assertEqual(len(result), 1)
+        feedback = result.iloc[0]["反馈信息"]
+        self.assertEqual(feedback.count("老师在所授的《代数与微积分》课程中"), 1)
+        self.assertNotIn("老师在所受", feedback)
+        self.assertNotIn("老师在教授", feedback)
+        self.assertNotIn("提前提前", feedback)
+        self.assertNotIn("进度始终", feedback)
+        self.assertNotIn("以共同学们", feedback)
+        self.assertNotIn("但是讲的非常棒", feedback)
+        self.assertIn("课前预告教学内容", feedback)
+        self.assertIn("以便同学们预习", feedback)
+        self.assertIn("课堂进度适中", feedback)
+        self.assertIn("课堂氛围较好", feedback)
 
 
 if __name__ == "__main__":
